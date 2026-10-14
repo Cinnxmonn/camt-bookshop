@@ -1,0 +1,173 @@
+name: Nightly regression
+
+on:
+  schedule:
+    # 03:00 Bangkok time (UTC+7) = 20:00 UTC previous day
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Test target'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - local
+          - url
+      custom_url:
+        description: 'Target URL (required if target is "url")'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-target:
+    runs-on: ubuntu-latest
+    outputs:
+      target-url: ${{ steps.resolve.outputs.url }}
+      mode: ${{ steps.resolve.outputs.mode }}
+    steps:
+      - id: resolve
+        env:
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_URL: ${{ inputs.custom_url }}
+          VARS_PROD_URL: ${{ vars.PRODUCTION_URL }}
+        run: |
+          TARGET="${INPUT_TARGET:-production}"
+          if [ "$TARGET" = "production" ]; then
+            URL="${VARS_PROD_URL:-https://camt-bookshop.vercel.app}"
+            echo "mode=deployed" >> "$GITHUB_OUTPUT"
+            echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          elif [ "$TARGET" = "url" ]; then
+            echo "mode=deployed" >> "$GITHUB_OUTPUT"
+            echo "url=${INPUT_URL}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=local" >> "$GITHUB_OUTPUT"
+            echo "url=" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: resolve-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shardIndex: [1, 2, 3]
+        shardTotal: [3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+
+      - name: Cache Playwright Browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install All Playwright Browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps
+
+      - name: Install system dependencies if cache hit
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps
+
+      - name: Run Sharded Full Suite
+        env:
+          CI: true
+          BASE_URL: ${{ needs.resolve-target.outputs.target-url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_PASS: ${{ secrets.TEST_PASS }}
+        run: |
+          npx playwright test --grep-invert @quarantine --reporter=blob --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+
+      - name: Upload Blob Report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-blob-reports-${{ matrix.shardIndex }}
+          path: blob-report/
+          retention-days: 1
+
+  merge-reports:
+    if: ${{ !cancelled() }}
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+
+      - name: Download all blobs
+        uses: actions/download-artifact@v4
+        with:
+          path: all-blobs
+          pattern: all-blob-reports-*
+          merge-multiple: true
+
+      - name: Merge HTML Report
+        run: npx playwright merge-reports --reporter html ./all-blobs
+
+      - name: Upload Merged HTML Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report
+          path: playwright-report/
+          retention-days: 14
+
+  quarantine-monitor:
+    needs: resolve-target
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+
+      - name: Cache Playwright Browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install system dependencies if cache hit
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Run Quarantined Tests
+        env:
+          CI: true
+          BASE_URL: ${{ needs.resolve-target.outputs.target-url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_PASS: ${{ secrets.TEST_PASS }}
+        run: |
+          npx playwright test --grep @quarantine --project=chromium
