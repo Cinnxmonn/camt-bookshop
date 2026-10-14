@@ -2,7 +2,7 @@ name: Main pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -60,9 +60,6 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment:
-      name: production
-      url: ${{ steps.deploy.outputs.url }}
     outputs:
       prod-url: ${{ steps.deploy.outputs.url }}
     steps:
@@ -123,6 +120,7 @@ jobs:
         env:
           CI: true
           BASE_URL: ${{ needs.deploy-production.outputs.prod-url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           TEST_USER: ${{ secrets.TEST_USER }}
           TEST_PASS: ${{ secrets.TEST_PASS }}
 
