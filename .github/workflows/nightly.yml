@@ -75,19 +75,15 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
-      - name: Install All Playwright Browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+      - name: Install Playwright Browsers & OS Dependencies
         run: npx playwright install --with-deps
 
-      - name: Install system dependencies if cache hit
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps
-
-      - name: Build Nuxt app if target is local
+      - name: Build Nuxt app if local
         if: needs.resolve-target.outputs.mode == 'local'
         run: npm run build
 
-      - name: Run Sharded Full Suite
+      - name: Run Sharded Full Suite (Deployed Target)
+        if: needs.resolve-target.outputs.mode == 'deployed'
         env:
           CI: true
           BASE_URL: ${{ needs.resolve-target.outputs.target-url }}
@@ -95,7 +91,16 @@ jobs:
           TEST_USER: ${{ secrets.TEST_USER }}
           TEST_PASS: ${{ secrets.TEST_PASS }}
         run: |
-          npx playwright test --grep-invert @quarantine --reporter=blob --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+          npx playwright test --grep-invert @quarantine --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+
+      - name: Run Sharded Full Suite (Local Target)
+        if: needs.resolve-target.outputs.mode == 'local'
+        env:
+          CI: true
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_PASS: ${{ secrets.TEST_PASS }}
+        run: |
+          npx playwright test --grep-invert @quarantine --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
 
       - name: Upload Blob Report
         if: ${{ !cancelled() }}
@@ -158,19 +163,29 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install Playwright Chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
-      - name: Install system dependencies if cache hit
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+      - name: Build Nuxt app if local
+        if: needs.resolve-target.outputs.mode == 'local'
+        run: npm run build
 
-      - name: Run Quarantined Tests
+      - name: Run Quarantined Tests (Deployed Target)
+        if: needs.resolve-target.outputs.mode == 'deployed'
         continue-on-error: true
         env:
           CI: true
           BASE_URL: ${{ needs.resolve-target.outputs.target-url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          TEST_USER: ${{ secrets.TEST_USER }}
+          TEST_PASS: ${{ secrets.TEST_PASS }}
+        run: |
+          npx playwright test --grep @quarantine --project=chromium
+
+      - name: Run Quarantined Tests (Local Target)
+        if: needs.resolve-target.outputs.mode == 'local'
+        continue-on-error: true
+        env:
+          CI: true
           TEST_USER: ${{ secrets.TEST_USER }}
           TEST_PASS: ${{ secrets.TEST_PASS }}
         run: |
