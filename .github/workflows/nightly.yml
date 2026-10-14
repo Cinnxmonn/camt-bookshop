@@ -83,6 +83,10 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps
 
+      - name: Build Nuxt app if target is local
+        if: needs.resolve-target.outputs.mode == 'local'
+        run: npm run build
+
       - name: Run Sharded Full Suite
         env:
           CI: true
@@ -136,7 +140,6 @@ jobs:
     needs: resolve-target
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -163,6 +166,7 @@ jobs:
         run: npx playwright install-deps chromium
 
       - name: Run Quarantined Tests
+        continue-on-error: true
         env:
           CI: true
           BASE_URL: ${{ needs.resolve-target.outputs.target-url }}
